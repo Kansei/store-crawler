@@ -1,15 +1,35 @@
 require_relative './store_crawler'
 
 class TabelogCrawler < StoreCrawler
-  def initialize(prefecture: '', area: '' )
+  def initialize(prefecture: '', city: '')
     @uri = 'https://tabelog.com'
     super
   end
 
   def perform
-    @page = @agent.get(@uri)
-    self.narrow_down_store
+    puts 'start crawling'
 
+    @page = @agent.get(@uri)
+    self.search_keyword(@city)
+
+    kus = self.get_areas
+
+    kus.each do |ku|
+      @ku = ku[:name]
+      @page = @agent.get(ku[:uri])
+      areas = self.get_areas
+
+      self.create_list_file
+
+      areas.each do |area|
+        @area = area[:name]
+        @page = @agent.get(area[:uri])
+        self.scrape
+      end
+    end
+  end
+
+  def scrape
     loop do
       store_list = self.get_store_list
 
@@ -23,14 +43,60 @@ class TabelogCrawler < StoreCrawler
     end
   end
 
-  def narrow_down_store
+
+  # def scrape_narrow_down_store
+  #   areas = self.get_areas
+  #
+  #   areas.each do |area|
+  #     @page = @agent.get(area.uri)
+  #     @area = area.name
+  #
+  #     @ku = @area
+  #       self.create_list_file
+  #       self.scrape_narrow_down_store
+  #     else
+  #       @ku = ''
+  #       self.create_list_file
+  #       self.scrape
+  #     end
+  #   end
+  # end
+
+  def get_areas
+    area_lists = @page.search('ul.list-balloon__list-col')
+
+    areas = []
+    if area_lists.length > 1
+      area_lists.each do |area_list|
+        a_tags = area_list.search('a')
+        a_tags.each do |a|
+             areas.push({
+                           name: a.text,
+                           uri: a.attribute('href').value
+                       })
+          end
+        end
+    else
+      a_tags = area_lists.search('a')
+      a_tags.each do |a|
+          areas.push({
+                         name: a.text,
+                         uri: a.attribute('href').value
+                     })
+      end
+    end
+
+    areas
+  end
+
+  def search_keyword(keyword)
     search_form = @page.form_with(name: 'FrmSrchFreeWord')
-    search_form.sa = @area
+    search_form.sa = keyword
     @page = @agent.submit(search_form)
   end
 
   def go_to_next_page
-    next_element = @page.search('.c-pagination__arrow')
+    next_element = @page.search('.c-pagination__arrow--next')
 
     return false if next_element.length == 0
 
@@ -44,11 +110,12 @@ class TabelogCrawler < StoreCrawler
   end
 
   def get_store_info(store_element)
-    store_page = @agent.get(store_element.attribute('href').value)
+    store = Store.new()
+
+    store.url = store_element.attribute('href').value
+    store_page = @agent.get(store.url)
     table =  store_page.search('table.c-table')
     rows = table.search('tr')
-
-    store = Store.new()
 
     rows.each do |row|
       th = row.at('th').text
@@ -64,14 +131,27 @@ class TabelogCrawler < StoreCrawler
       end
     end
 
+    store.area = @area
+
     store
   end
 
   def write(stores)
-    CSV.open(@path+@filename+@extension,'a') do |file|
+    CSV.open(@filepath,'a') do |file|
       stores.each do |store|
-        file << [store.name, store.type, store.open_time,  store.address]
+        file << [store.name, store.type, store.open_time, store.area, store.address, store.url]
       end
+    end
+  end
+
+  def create_list_file
+    filename = @uri.split("//")[1].split(".")[0]+'_'+@prefecture+'_'+@city+@ku
+    extension = '.csv'
+    path = './list/'
+    @filepath = path+filename+extension
+
+    CSV.open(@filepath,'w') do |file|
+      file << ["店名", "ジャンル", "営業時間", "地域", "住所", "url"]
     end
   end
 end
